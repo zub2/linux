@@ -88,7 +88,6 @@ struct opal_dev {
 	void *data;
 	sec_send_recv *send_recv;
 
-	const struct opal_step *steps;
 	struct mutex dev_lock;
 	u16 comid;
 	u32 hsn;
@@ -387,19 +386,19 @@ static void check_geometry(struct opal_dev *dev, const void *data)
 	dev->lowest_lba = geo->lowest_aligned_lba;
 }
 
-static int next(struct opal_dev *dev)
+static int next(struct opal_dev *dev, const struct opal_step *steps)
 {
 	const struct opal_step *step;
 	int state = 0, error = 0;
 
 	do {
-		step = &dev->steps[state];
+		step = &steps[state];
 		if (!step->fn)
 			break;
 
 		error = step->fn(dev, step->data);
 		if (error) {
-			pr_debug("Step %d (%pS) failed wit error %d: %s\n",
+			pr_debug("Step %d (%pS) failed with error %d: %s\n",
 				 state, step->fn, error,
 				 opal_error_to_human(error));
 
@@ -1939,14 +1938,11 @@ static int end_opal_session_error(struct opal_dev *dev)
 		{ end_opal_session, },
 		{ NULL, }
 	};
-	dev->steps = error_end_session;
-	return next(dev);
+	return next(dev, error_end_session);
 }
 
-static inline void setup_opal_dev(struct opal_dev *dev,
-				  const struct opal_step *steps)
+static inline void setup_opal_dev(struct opal_dev *dev)
 {
-	dev->steps = steps;
 	dev->tsn = 0;
 	dev->hsn = 0;
 	dev->prev_data = NULL;
@@ -1961,8 +1957,8 @@ static int check_opal_support(struct opal_dev *dev)
 	int ret;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, steps);
 	dev->supported = !ret;
 	mutex_unlock(&dev->dev_lock);
 	return ret;
@@ -2025,8 +2021,8 @@ static int opal_secure_erase_locking_range(struct opal_dev *dev,
 	int ret;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, erase_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, erase_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2044,8 +2040,8 @@ static int opal_erase_locking_range(struct opal_dev *dev,
 	int ret;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, erase_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, erase_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2072,8 +2068,8 @@ static int opal_enable_disable_shadow_mbr(struct opal_dev *dev,
 		return -EINVAL;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, mbr_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, mbr_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2096,8 +2092,8 @@ static int opal_mbr_status(struct opal_dev *dev, struct opal_mbr_data *opal_mbr)
 		return -EINVAL;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, mbr_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, mbr_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2121,8 +2117,8 @@ static int opal_write_shadow_mbr(struct opal_dev *dev,
 		return -EINVAL;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, mbr_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, mbr_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2139,7 +2135,7 @@ static int opal_save(struct opal_dev *dev, struct opal_lock_unlock *lk_unlk)
 	suspend->lr = lk_unlk->session.opal_key.lr;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, NULL);
+	setup_opal_dev(dev);
 	add_suspend_info(dev, suspend);
 	mutex_unlock(&dev->dev_lock);
 	return 0;
@@ -2175,8 +2171,8 @@ static int opal_add_user_to_lr(struct opal_dev *dev,
 	}
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2192,8 +2188,8 @@ static int opal_reverttper(struct opal_dev *dev, struct opal_key *opal)
 	int ret;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, revert_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, revert_steps);
 	mutex_unlock(&dev->dev_lock);
 
 	/*
@@ -2224,8 +2220,7 @@ static int __opal_lock_unlock(struct opal_dev *dev,
 		{ NULL, }
 	};
 
-	dev->steps = lk_unlk->session.sum ? unlock_sum_steps : unlock_steps;
-	return next(dev);
+	return next(dev, lk_unlk->session.sum ? unlock_sum_steps : unlock_steps);
 }
 
 static int __opal_set_mbr_done(struct opal_dev *dev, struct opal_key *key)
@@ -2239,8 +2234,7 @@ static int __opal_set_mbr_done(struct opal_dev *dev, struct opal_key *key)
 		{ NULL, }
 	};
 
-	dev->steps = mbrdone_step;
-	return next(dev);
+	return next(dev, mbrdone_step);
 }
 
 static int opal_lock_unlock(struct opal_dev *dev,
@@ -2276,8 +2270,8 @@ static int opal_take_ownership(struct opal_dev *dev, struct opal_key *opal)
 		return -ENODEV;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, owner_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, owner_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2298,8 +2292,8 @@ static int opal_activate_lsp(struct opal_dev *dev, struct opal_lr_act *opal_lr_a
 		return -EINVAL;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, active_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, active_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2317,8 +2311,8 @@ static int opal_setup_locking_range(struct opal_dev *dev,
 	int ret;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, lr_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, lr_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2341,8 +2335,8 @@ static int opal_set_new_pw(struct opal_dev *dev, struct opal_new_pw *opal_pw)
 		return -EINVAL;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, pw_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, pw_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2367,8 +2361,8 @@ static int opal_activate_user(struct opal_dev *dev,
 	}
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, act_steps);
-	ret = next(dev);
+	setup_opal_dev(dev);
+	ret = next(dev, act_steps);
 	mutex_unlock(&dev->dev_lock);
 	return ret;
 }
@@ -2385,7 +2379,7 @@ bool opal_unlock_from_suspend(struct opal_dev *dev)
 		return false;
 
 	mutex_lock(&dev->dev_lock);
-	setup_opal_dev(dev, NULL);
+	setup_opal_dev(dev);
 
 	list_for_each_entry(suspend, &dev->unlk_lst, node) {
 		dev->tsn = 0;
