@@ -34,6 +34,9 @@
 #define IO_BUFFER_LENGTH 2048
 #define MAX_TOKS 64
 
+/* Number of bytes needed by cmd_finalize. */
+#define CMD_FINALIZE_BYTES_NEEDED 7
+
 struct opal_step {
 	int (*fn)(struct opal_dev *dev, void *data);
 	void *data;
@@ -668,7 +671,11 @@ static int cmd_finalize(struct opal_dev *cmd, u32 hsn, u32 tsn)
 	struct opal_header *hdr;
 	int err = 0;
 
-	/* close the parameter list opened from cmd_start */
+	/*
+	 * Close the parameter list opened from cmd_start.
+	 * The number of bytes added must be equal to
+	 * CMD_FINALIZE_BYTES_NEEDED.
+	 */
 	add_token_u8(&err, cmd, OPAL_ENDLIST);
 
 	add_token_u8(&err, cmd, OPAL_ENDOFDATA);
@@ -1503,23 +1510,13 @@ static int write_shadow_mbr(struct opal_dev *dev, void *data)
 	struct opal_shadow_mbr *shadow = data;
 	const u8 __user *src;
 	u8 *dst;
-	size_t off;
+	size_t off = 0;
 	u64 len;
 	int err = 0;
 
-	/* FIXME: this is the maximum we can use for IO_BUFFER_LENGTH=2048.
-	 *        Instead of having a constant value, it would be nice to
-	 *        compute the actual value depending on IO_BUFFER_LENGTH
-	 */
-	len = 1950;
-
 	/* do the actual transmission(s) */
 	src = (u8 *) shadow->data;
-	for (off = 0 ; off < shadow->size; off += len) {
-		len = min(len, shadow->size - off);
-
-		pr_debug("MBR: write bytes %zu+%llu/%llu\n",
-			 off, len, shadow->size);
+	while (off < shadow->size) {
 		err = cmd_start(dev, opaluid[OPAL_MBR], opalmethod[OPAL_SET]);
 		add_token_u8(&err, dev, OPAL_STARTNAME);
 		add_token_u8(&err, dev, OPAL_WHERE);
@@ -1528,6 +1525,16 @@ static int write_shadow_mbr(struct opal_dev *dev, void *data)
 
 		add_token_u8(&err, dev, OPAL_STARTNAME);
 		add_token_u8(&err, dev, OPAL_VALUES);
+
+		/*
+		 * The bytestring header is either 1 or 2 bytes, so assume 2.
+		 * There also needs to be enough space to accomodate the trailing
+		 * OPAL_ENDNAME (1 byte) and tokens added by cmd_finalize.
+		 */
+		len = min(remaining_size(dev) - (2 + 1 + CMD_FINALIZE_BYTES_NEEDED), (size_t)(shadow->size - off));
+		pr_debug("MBR: write bytes %zu+%llu/%llu\n",
+			 off, len, shadow->size);
+
 		dst = add_bytestring_header(&err, dev, len);
 		if (!dst)
 			break;
@@ -1541,6 +1548,8 @@ static int write_shadow_mbr(struct opal_dev *dev, void *data)
 		err = finalize_and_send(dev, parse_and_check_status);
 		if (err)
 			break;
+
+		off += len;
 	}
 	return err;
 }
