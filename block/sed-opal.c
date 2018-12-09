@@ -510,12 +510,17 @@ static int opal_discovery0(struct opal_dev *dev, void *data)
 	return opal_discovery0_end(dev);
 }
 
+static size_t remaining_size(struct opal_dev *cmd)
+{
+	return IO_BUFFER_LENGTH - cmd->pos;
+}
+
 static bool can_add(int *err, struct opal_dev *cmd, size_t len)
 {
 	if (*err)
 		return false;
 
-	if (len > IO_BUFFER_LENGTH || cmd->pos >= IO_BUFFER_LENGTH - len) {
+	if (remaining_size(cmd) < len) {
 		pr_debug("Error adding %zu bytes: end of buffer.\n", len);
 		*err = -ERANGE;
 		return false;
