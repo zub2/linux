@@ -635,7 +635,7 @@ static int build_locking_range(u8 *buffer, size_t length, u8 lr)
 static int build_locking_user(u8 *buffer, size_t length, u8 lr)
 {
 	if (length > OPAL_UID_LENGTH) {
-		pr_debug("Can't build locking range user, Length OOB\n");
+		pr_debug("Can't build locking range user. Length OOB\n");
 		return -ERANGE;
 	}
 
